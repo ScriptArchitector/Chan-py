@@ -1,0 +1,13 @@
+Chan-py Engine Notice & Usage Terms
+Author: ScriptArchitector
+Official Repository: https://github.com/ScriptArchitector/Chan-py
+1. Attribution Requirement
+Any software, application, or game developed using the Chan-py engine must provide clear and visible attribution to the original author.
+You must include the following link in your project's documentation, "About" section, or credits:
+https://github.com/ScriptArchitector/Chan-py
+Mandatory Branding: You are strictly prohibited from hiding, removing, or obscuring the fact that your project is powered by the Chan-py engine. The name "Chan-py" must remain visible in the credits or technical specifications of the final product.
+2. Ownership of Derivative Works
+Game Property: All games or applications created using the Chan-py engine are the exclusive property of their respective creators.
+Source Code: Creators are permitted to keep the source code of their games private (closed-source). You are not required to open-source your own logic, assets, or scripts developed on top of this engine.
+3. Disclaimer
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY.
