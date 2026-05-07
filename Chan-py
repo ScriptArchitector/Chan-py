@@ -1,0 +1,307 @@
+import os
+import sys
+import json
+import ctypes
+import threading
+import subprocess
+import urllib
+import urllib.request
+import urllib.error
+import tkinter as tk
+from tkinter import ttk, messagebox, simpledialog
+
+try:
+    ctypes.windll.shcore.SetProcessDpiAwareness(1)
+except Exception:
+    try:
+        ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+for d in ["core", "projects"]:
+    os.makedirs(d, exist_ok=True)
+
+class PluginRegistry:
+    sections = {}
+    app_instance = None
+
+    @classmethod
+    def register_button(cls, section, name, action):
+        if section not in cls.sections:
+            cls.sections[section] = []
+        if name not in [item[0] for item in cls.sections[section]]:
+            cls.sections[section].append((name, action))
+
+    @classmethod
+    def clear(cls):
+        cls.sections.clear()
+
+    @classmethod
+    def load_plugins(cls):
+        cls.clear()
+        if not os.path.exists("core"): return
+        for f in os.listdir("core"):
+            if f.endswith(".cpyp"):
+                path = os.path.join("core", f)
+                try:
+                    with open(path, "r", encoding="utf-8") as file:
+                        code = file.read()
+                    
+                    env = {
+                        "__builtins__": __builtins__,
+                        "os": os, "sys": sys, "json": json,
+                        "subprocess": subprocess, "urllib": urllib,
+                        "threading": threading, "tk": tk, "ttk": ttk,
+                        "messagebox": messagebox, "simpledialog": simpledialog,
+                        "app": cls.app_instance, "registry": cls
+                    }
+                    
+                    exec(code, env)
+                    if "setup_plugin" in env and callable(env["setup_plugin"]):
+                        env["setup_plugin"]()
+                except Exception as e:
+                    print(f"Failed to load plugin {f}: {e}")
+
+class ChanLauncher(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        
+        try:
+            myappid = 'chanpy.engine.sdk.1.0'
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(myappid)
+        except Exception:
+            pass
+
+        self.title("chan-py")
+        self.geometry("1150x800")
+        self.configure(bg="#1c1c1c")
+        
+        PluginRegistry.app_instance = self
+        self.selected_project = None
+        self._main_icon = None 
+        self._dash_icon = None
+        
+        self.setup_styles()
+        self.main_view = tk.Frame(self, bg="#1c1c1c")
+        self.main_view.pack(fill="both", expand=True)
+        
+        self.show_dashboard()
+        threading.Thread(target=self.initial_sync, daemon=True).start()
+
+    def setup_styles(self):
+        s = ttk.Style()
+        s.theme_use('clam')
+        s.configure("TFrame", background="#2b2b2b")
+        s.configure("Side.TFrame", background="#232323")
+        s.configure("Header.TLabel", background="#2b2b2b", foreground="#e2c08d", font=("Segoe UI", 10, "bold"))
+        s.configure("Action.TButton", padding=8, background="#3c3f41", foreground="#fff", width=35, font=("Segoe UI", 10))
+        s.map("Action.TButton", background=[('active', '#4e5254')])
+        s.configure("Nav.TButton", padding=6, background="#1c1c1c", foreground="#888", font=("Segoe UI", 10))
+        s.map("Nav.TButton", background=[('active', '#3c3f41')], foreground=[('active', '#fff')])
+        s.configure("Progress.Horizontal.TProgressbar", background="#e2c08d", troughcolor="#1c1c1c", bordercolor="#232323")
+
+    def apply_app_icon(self, path):
+        try:
+            if os.path.exists(path):
+                img = tk.PhotoImage(file=path)
+                
+                self._main_icon = img
+                self.iconphoto(True, img)
+
+                dash_img = tk.PhotoImage(file=path)
+                dw, dh = dash_img.width(), dash_img.height()
+                
+                target_size = 200
+                if dw > target_size or dh > target_size:
+                    d_scale = max(1, min(dw // target_size, dh // target_size))
+                    dash_img = dash_img.subsample(d_scale, d_scale)
+                    
+                self._dash_icon = dash_img
+
+                if hasattr(self, 'icon_lbl') and self.icon_lbl.winfo_exists():
+                    self.icon_lbl.config(image=self._dash_icon)
+        except Exception as e:
+            print(f"Icon error: {e}")
+
+    def update_progress_ui(self, name, downloaded, total):
+        if not self.progress_frame.winfo_ismapped():
+            self.progress_frame.pack(side="bottom", fill="x", pady=10, padx=10)
+            
+        if total > 0:
+            self.progress_bar["maximum"] = total
+            self.progress_bar["value"] = downloaded
+            mb_down = downloaded / (1024 * 1024)
+            mb_tot = total / (1024 * 1024)
+            self.progress_lbl.config(text=f"Syncing: {name}\n{mb_down:.2f} MB / {mb_tot:.2f} MB")
+        else:
+            self.progress_bar["maximum"] = 100
+            self.progress_bar["value"] = 100
+            self.progress_lbl.config(text=f"Syncing: {name}...")
+        self.update_idletasks()
+
+    def hide_progress_ui(self):
+        if self.progress_frame.winfo_ismapped():
+            self.progress_frame.pack_forget()
+
+    def initial_sync(self):
+        headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+        
+        icon_url = "https://github.com/ScriptArchitector/Chan-py-icon/releases/download/icon/Chan-py-icon.png"
+        icon_path = os.path.join("core", "app_icon.png")
+        
+        if not os.path.exists(icon_path):
+            try:
+                self.after(0, self.update_progress_ui, "Engine Icon", 0, 1)
+                req = urllib.request.Request(icon_url, headers=headers)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    total = int(resp.getheader('Content-Length', 0))
+                    downloaded = 0
+                    with open(icon_path, 'wb') as f:
+                        while True:
+                            chunk = resp.read(8192)
+                            if not chunk: break
+                            f.write(chunk)
+                            downloaded += len(chunk)
+                            self.after(0, self.update_progress_ui, "Engine Icon", downloaded, total)
+                self.after(0, self.apply_app_icon, icon_path)
+            except Exception as e:
+                print(f"Icon sync failed: {e}")
+        else:
+            self.after(0, self.apply_app_icon, icon_path)
+
+        try:
+            api_url = "https://api.github.com/repos/ScriptArchitector/cpyp/releases/latest"
+            req = urllib.request.Request(api_url, headers=headers)
+            with urllib.request.urlopen(req, timeout=10) as response:
+                data = json.loads(response.read().decode())
+                assets = [a for a in data.get("assets", []) if a["name"].endswith(".cpyp")]
+                
+                new_plugins_found = False
+                for asset in assets:
+                    name = asset["name"]
+                    path = os.path.join("core", name)
+                    
+                    if not os.path.exists(path):
+                        new_plugins_found = True
+                        self.after(0, self.update_progress_ui, name, 0, 1)
+                        d_req = urllib.request.Request(asset["browser_download_url"], headers=headers)
+                        with urllib.request.urlopen(d_req, timeout=15) as d_resp:
+                            total = int(d_resp.getheader('Content-Length', 0))
+                            downloaded = 0
+                            with open(path, 'wb') as out_file:
+                                while True:
+                                    chunk = d_resp.read(8192)
+                                    if not chunk: break
+                                    out_file.write(chunk)
+                                    downloaded += len(chunk)
+                                    self.after(0, self.update_progress_ui, name, downloaded, total)
+                                    
+                if new_plugins_found or not PluginRegistry.sections:
+                    self.after(0, self.reload_and_refresh)
+        except Exception as e:
+            print(f"Plugin sync failed: {e}")
+        finally:
+            self.after(500, self.hide_progress_ui)
+            self.after(0, self.reload_and_refresh) 
+
+    def reload_and_refresh(self):
+        PluginRegistry.load_plugins()
+        if self.selected_project: self.draw_action_grid()
+        else: self.show_dashboard()
+
+    def create_project(self):
+        name = simpledialog.askstring("New Project", "Enter project name:", parent=self)
+        if name:
+            safe_name = "".join(c for c in name if c.isalnum() or c in " _-").strip()
+            if not safe_name: return
+            proj_path = os.path.join("projects", safe_name)
+            if not os.path.exists(proj_path):
+                os.makedirs(proj_path)
+                os.makedirs(os.path.join(proj_path, "imgs"))
+                with open(os.path.join(proj_path, "script.cpy"), "w", encoding="utf-8") as f:
+                    f.write("label start:\n    \"Welcome to chan-py!\"\n")
+                with open(os.path.join(proj_path, "gui.cpy"), "w", encoding="utf-8") as f:
+                    f.write("# GUI Configuration for .cpy engine\n")
+            self.refresh_projects()
+
+    def refresh_projects(self):
+        self.p_list.delete(0, tk.END)
+        for d in os.listdir("projects"):
+            if os.path.isdir(os.path.join("projects", d)):
+                self.p_list.insert(tk.END, d)
+
+    def show_dashboard(self):
+        for w in self.main_view.winfo_children(): w.destroy()
+        
+        header_frame = tk.Frame(self.main_view, bg="#1c1c1c")
+        header_frame.pack(pady=20, anchor="w", padx=30)
+        
+        tk.Label(header_frame, text="Chan-py", bg="#1c1c1c", fg="#fff", font=("Segoe UI", 28, "bold")).pack(side="left")
+        
+        self.icon_lbl = tk.Label(header_frame, bg="#1c1c1c")
+        self.icon_lbl.pack(side="left", padx=25)
+        if hasattr(self, '_dash_icon') and self._dash_icon:
+            self.icon_lbl.config(image=self._dash_icon)
+        
+        box = tk.Frame(self.main_view, bg="#1c1c1c")
+        box.pack(fill="both", expand=True, padx=30, pady=(0, 30))
+        
+        self.side = ttk.Frame(box, style="Side.TFrame", width=280)
+        self.side.pack(side="left", fill="y", padx=(0, 15))
+        self.side.pack_propagate(False)
+        
+        tk.Label(self.side, text="PROJECTS", bg="#232323", fg="#888", font=("Segoe UI", 10, "bold")).pack(anchor="w", padx=20, pady=15)
+        self.p_list = tk.Listbox(self.side, bg="#232323", fg="#fff", borderwidth=0, highlightthickness=0, font=("Segoe UI", 11), selectbackground="#4e5254")
+        self.p_list.pack(fill="both", expand=True, padx=10)
+        self.p_list.bind("<<ListboxSelect>>", self.on_project_select)
+        
+        nav_side = tk.Frame(self.side, bg="#232323")
+        nav_side.pack(side="bottom", fill="x", pady=15, padx=10)
+        ttk.Button(nav_side, text="+ Create New Project", style="Nav.TButton", command=self.create_project).pack(fill="x", pady=2)
+        ttk.Button(nav_side, text="↻ Refresh", style="Nav.TButton", command=self.refresh_projects).pack(fill="x", pady=2)
+        
+        self.progress_frame = tk.Frame(self.side, bg="#232323")
+        self.progress_lbl = tk.Label(self.progress_frame, text="", bg="#232323", fg="#fff", font=("Segoe UI", 9))
+        self.progress_lbl.pack(anchor="w", pady=(0, 5))
+        self.progress_bar = ttk.Progressbar(self.progress_frame, style="Progress.Horizontal.TProgressbar", orient="horizontal", mode="determinate")
+        self.progress_bar.pack(fill="x")
+        
+        self.refresh_projects()
+                
+        self.work_area = ttk.Frame(box, style="TFrame")
+        self.work_area.pack(side="right", fill="both", expand=True)
+        
+        if self.selected_project: self.draw_action_grid()
+        else: tk.Label(self.work_area, text="Select a project", bg="#2b2b2b", fg="#666", font=("Segoe UI", 14)).place(relx=0.5, rely=0.5, anchor="center")
+
+    def on_project_select(self, _):
+        idx = self.p_list.curselection()
+        if idx:
+            self.selected_project = self.p_list.get(idx)
+            self.draw_action_grid()
+
+    def draw_action_grid(self):
+        for w in self.work_area.winfo_children(): w.destroy()
+        tk.Label(self.work_area, text=self.selected_project, bg="#2b2b2b", fg="#fff", font=("Segoe UI", 24, "bold")).pack(anchor="w", padx=40, pady=(40, 20))
+        grid = tk.Frame(self.work_area, bg="#2b2b2b")
+        grid.pack(fill="x", padx=40)
+        
+        if not PluginRegistry.sections:
+            tk.Label(grid, text="Awaiting core downloads...", bg="#2b2b2b", fg="#888", font=("Segoe UI", 12)).pack(pady=50)
+            return
+            
+        cols = [tk.Frame(grid, bg="#2b2b2b"), tk.Frame(grid, bg="#2b2b2b")]
+        cols[0].pack(side="left", anchor="n", padx=(0, 60))
+        cols[1].pack(side="left", anchor="n")
+        
+        for i, (sec_name, items) in enumerate(PluginRegistry.sections.items()):
+            parent = cols[i % 2]
+            f = tk.Frame(parent, bg="#2b2b2b")
+            f.pack(fill="x", pady=(0, 20))
+            ttk.Label(f, text=sec_name.upper(), style="Header.TLabel").pack(anchor="w", pady=5)
+            for name, action in items:
+                ttk.Button(f, text=name, style="Action.TButton", command=action).pack(anchor="w", pady=2)
+
+if __name__ == "__main__":
+    app = ChanLauncher()
+    app.mainloop()
